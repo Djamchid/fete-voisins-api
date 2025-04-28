@@ -1,183 +1,299 @@
+/**
+ * API Client pour La Fête des Voisins
+ * Ce script permet de communiquer avec l'API Google Apps Script
+ * sans utiliser d'iframes (ce qui évite les problèmes de CSP)
+ */
+
 // Configuration
 const API_URL = 'https://script.google.com/macros/s/AKfycbx8hiEDN_ncShkzXKoOk79enFAvcH7TP_xV0KmEqtB5dj1hOkL7f4iterT_KT45PHXoGw/exec';
-const ALLOWED_ORIGINS = ['https://djamchid.github.io'];
-const MAX_PAYLOAD_SIZE = 1024 * 1024; // 1MB
+const DEBUG = false; // Activer pour voir les logs détaillés
 
-// Fonction principale pour traiter les requêtes
-async function handleRequest(request) {
-  // Vérifier si l'origine est autorisée
-  const origin = request.headers.get('Origin');
-  
-  if (!ALLOWED_ORIGINS.includes(origin)) {
-    return new Response(JSON.stringify({
-      result: 'error',
-      error: 'Origine non autorisée'
-    }), {
-      status: 403,
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
+/**
+ * Classe principale pour gérer les interactions avec l'API
+ */
+class FeteVoisinsApiClient {
+  constructor() {
+    this.csrfToken = null;
+    this.lastError = null;
+    this.isInitialized = false;
+    
+    // Initialiser l'API
+    this.init();
   }
-  
-  // Ajouter les en-têtes CORS
-  const corsHeaders = {
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, X-Requested-With',
-    'Access-Control-Max-Age': '86400', // 24 heures
-  };
-  
-  // Gérer les requêtes OPTIONS (preflight)
-  if (request.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
-      headers: corsHeaders
-    });
-  }
-  
-  // Gérer les requêtes GET
-  if (request.method === 'GET') {
+
+  /**
+   * Initialise l'API en récupérant un jeton CSRF
+   */
+  async init() {
     try {
-      const url = new URL(request.url);
-      const params = url.searchParams;
+      if (DEBUG) console.log('Initialisation de l\'API...');
       
-      // Construire l'URL avec les paramètres pour Google Apps Script
-      const apiUrl = new URL(API_URL);
-      for (const [key, value] of params) {
-        apiUrl.searchParams.append(key, value);
-      }
+      // Récupérer un jeton CSRF
+      await this.refreshCsrfToken();
       
-      // Faire la requête à Google Apps Script
-      const response = await fetch(apiUrl.toString(), {
-        method: 'GET',
-        headers: {
-          'User-Agent': 'FeteVoisinsProxy/1.0'
-        }
-      });
+      this.isInitialized = true;
       
-      // Lire le corps de la réponse
-      const data = await response.text();
+      if (DEBUG) console.log('API initialisée avec succès');
       
-      // Renvoyer la réponse avec les en-têtes CORS
-      return new Response(data, {
-        status: response.status,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
-        }
-      });
+      // Déclencher un événement pour signaler que l'API est prête
+      document.dispatchEvent(new CustomEvent('fete-voisins-api-ready'));
+      
+      return true;
     } catch (error) {
-      console.error('Erreur lors de la requête GET:', error);
+      this.lastError = error.message || 'Erreur d\'initialisation';
+      console.error('Erreur lors de l\'initialisation de l\'API:', error);
       
-      return new Response(JSON.stringify({
-        result: 'error',
-        error: 'Erreur lors de la communication avec le serveur'
-      }), {
-        status: 500,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
-        }
-      });
+      // Déclencher un événement pour signaler que l'API a échoué
+      document.dispatchEvent(new CustomEvent('fete-voisins-api-error', { 
+        detail: { error: this.lastError } 
+      }));
+      
+      return false;
     }
   }
-  
-  // Gérer les requêtes POST
-  if (request.method === 'POST') {
+
+  /**
+   * Rafraîchit le jeton CSRF
+   */
+  async refreshCsrfToken() {
     try {
-      // Vérifier la taille de la charge utile
-      const contentLength = parseInt(request.headers.get('Content-Length') || '0');
-      if (contentLength > MAX_PAYLOAD_SIZE) {
-        return new Response(JSON.stringify({
-          result: 'error',
-          error: 'Taille de la requête trop importante'
-        }), {
-          status: 413,
-          headers: {
-            ...corsHeaders,
-            'Content-Type': 'application/json'
-          }
-        });
+      const response = await this.makeRequest('GET', {
+        origin: window.location.origin
+      });
+      
+      if (response && response.csrfToken) {
+        this.csrfToken = response.csrfToken;
+        return true;
       }
       
-      // Obtenir le corps de la requête
-      let body;
-      const contentType = request.headers.get('Content-Type');
+      throw new Error('Pas de jeton CSRF dans la réponse');
+    } catch (error) {
+      this.lastError = 'Erreur de rafraîchissement du jeton: ' + (error.message || 'Erreur inconnue');
+      console.error('Erreur lors du rafraîchissement du jeton CSRF:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Effectue une requête vers l'API
+   * @param {string} method - Méthode HTTP (GET ou POST)
+   * @param {Object} params - Paramètres pour la requête GET
+   * @param {Object} data - Données pour la requête POST
+   * @returns {Promise<Object>} - Réponse JSON de l'API
+   */
+  async makeRequest(method, params = {}, data = null) {
+    try {
+      // Construire l'URL avec les paramètres
+      const url = new URL(API_URL);
       
-      if (contentType && contentType.includes('application/json')) {
-        // Récupérer et valider le JSON
-        try {
-          body = await request.json();
-        } catch (e) {
-          return new Response(JSON.stringify({
-            result: 'error',
-            error: 'Format JSON invalide'
-          }), {
-            status: 400,
-            headers: {
-              ...corsHeaders,
-              'Content-Type': 'application/json'
-            }
-          });
-        }
-      } else {
-        // Pour les autres types de contenu, on récupère le texte brut
-        body = await request.text();
+      // Ajouter l'origine aux paramètres si elle n'est pas déjà présente
+      if (!params.origin) {
+        params.origin = window.location.origin;
       }
       
-      // Faire la requête à Google Apps Script
-      const response = await fetch(API_URL, {
-        method: 'POST',
+      // Ajouter les paramètres à l'URL
+      Object.keys(params).forEach(key => {
+        url.searchParams.append(key, params[key]);
+      });
+      
+      if (DEBUG) console.log(`Requête ${method} vers ${url}`);
+      
+      // Options de la requête
+      const options = {
+        method: method,
         headers: {
-          'Content-Type': contentType || 'application/json',
-          'User-Agent': 'FeteVoisinsProxy/1.0'
+          'User-Agent': 'FeteVoisinsClient/1.0'
         },
-        body: typeof body === 'string' ? body : JSON.stringify(body)
-      });
+        mode: 'cors',
+        credentials: 'omit'
+      };
       
-      // Lire le corps de la réponse
-      const data = await response.text();
+      // Ajouter le corps pour les requêtes POST
+      if (method === 'POST' && data) {
+        // Ajouter le jeton CSRF et l'origine aux données
+        data.csrfToken = this.csrfToken;
+        data.origin = window.location.origin;
+        
+        options.headers['Content-Type'] = 'application/json';
+        options.body = JSON.stringify(data);
+        
+        if (DEBUG) console.log('POST data:', data);
+      }
       
-      // Renvoyer la réponse avec les en-têtes CORS
-      return new Response(data, {
-        status: response.status,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
-        }
-      });
+      // Effectuer la requête
+      const response = await fetch(url.toString(), options);
+      
+      // Vérifier le statut de la réponse
+      if (!response.ok) {
+        throw new Error(`Erreur HTTP: ${response.status} ${response.statusText}`);
+      }
+      
+      // Analyser la réponse JSON
+      const responseText = await response.text();
+      let responseData;
+      
+      try {
+        responseData = JSON.parse(responseText);
+      } catch (e) {
+        console.error('Réponse non-JSON reçue:', responseText);
+        throw new Error('Format de réponse invalide');
+      }
+      
+      if (DEBUG) console.log('Réponse de l\'API:', responseData);
+      
+      // Mettre à jour le jeton CSRF si présent dans la réponse
+      if (responseData.newCsrfToken) {
+        this.csrfToken = responseData.newCsrfToken;
+        if (DEBUG) console.log('Nouveau jeton CSRF reçu');
+      } else if (responseData.csrfToken) {
+        this.csrfToken = responseData.csrfToken;
+        if (DEBUG) console.log('Jeton CSRF reçu');
+      }
+      
+      // Gérer les erreurs dans la réponse
+      if (responseData.result === 'error') {
+        this.lastError = responseData.error || 'Erreur inconnue';
+        throw new Error(this.lastError);
+      }
+      
+      return responseData;
     } catch (error) {
-      console.error('Erreur lors de la requête POST:', error);
-      
-      return new Response(JSON.stringify({
-        result: 'error',
-        error: 'Erreur lors de la communication avec le serveur'
-      }), {
-        status: 500,
-        headers: {
-          ...corsHeaders,
-          'Content-Type': 'application/json'
-        }
-      });
+      this.lastError = error.message || 'Erreur de communication';
+      console.error(`Erreur lors de la requête ${method}:`, error);
+      throw error;
     }
   }
-  
-  // Si la méthode n'est ni GET, ni POST, ni OPTIONS
-  return new Response(JSON.stringify({
-    result: 'error',
-    error: 'Méthode non supportée'
-  }), {
-    status: 405,
-    headers: {
-      ...corsHeaders,
-      'Content-Type': 'application/json',
-      'Allow': 'GET, POST, OPTIONS'
+
+  /**
+   * Récupère les données des contributions
+   * @returns {Promise<Array>} - Liste des contributions
+   */
+  async getContributions() {
+    try {
+      if (!this.isInitialized) {
+        await this.init();
+      }
+      
+      const response = await this.makeRequest('GET', {
+        action: 'getData'
+      });
+      
+      if (response && response.result === 'success' && Array.isArray(response.data)) {
+        return response.data;
+      }
+      
+      throw new Error('Format de données invalide');
+    } catch (error) {
+      this.lastError = 'Erreur lors de la récupération des contributions: ' + (error.message || 'Erreur inconnue');
+      console.error('Erreur lors de la récupération des contributions:', error);
+      throw error;
     }
-  });
+  }
+
+  /**
+   * Envoie une contribution
+   * @param {Object} formData - Données du formulaire
+   * @returns {Promise<Object>} - Réponse de l'API
+   */
+  async submitContribution(formData) {
+    try {
+      if (!this.isInitialized) {
+        await this.init();
+      }
+      
+      // Valider les données avant l'envoi
+      this.validateFormData(formData);
+      
+      const response = await this.makeRequest('POST', {}, formData);
+      
+      // Vérifier si le jeton CSRF était invalide et réessayer une fois
+      if (response.error && response.error.includes('jeton invalide')) {
+        if (DEBUG) console.log('Jeton CSRF invalide, rafraîchissement et nouvel essai...');
+        
+        await this.refreshCsrfToken();
+        return this.makeRequest('POST', {}, formData);
+      }
+      
+      return response;
+    } catch (error) {
+      this.lastError = 'Erreur lors de l\'envoi de la contribution: ' + (error.message || 'Erreur inconnue');
+      console.error('Erreur lors de l\'envoi de la contribution:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Valide les données du formulaire
+   * @param {Object} data - Données à valider
+   * @throws {Error} - Erreur si les données sont invalides
+   */
+  validateFormData(data) {
+    if (!data) {
+      throw new Error('Aucune donnée fournie');
+    }
+    
+    // Vérifier les champs obligatoires
+    const requiredFields = ['nom', 'email', 'categorie', 'detail', 'portions'];
+    const missingFields = [];
+    
+    for (const field of requiredFields) {
+      if (!data[field]) {
+        missingFields.push(field);
+      }
+    }
+    
+    if (missingFields.length > 0) {
+      throw new Error(`Champs obligatoires manquants: ${missingFields.join(', ')}`);
+    }
+    
+    // Valider le format de l'email
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(data.email)) {
+      throw new Error('Format d\'email invalide');
+    }
+    
+    // Valider la catégorie
+    const validCategories = ['sale', 'sucre', 'soft', 'alco'];
+    if (!validCategories.includes(data.categorie)) {
+      throw new Error('Catégorie invalide');
+    }
+    
+    // Valider le nombre de personnes
+    const nbPersonnes = parseInt(data.nbPersonnes);
+    if (isNaN(nbPersonnes) || nbPersonnes < 1 || nbPersonnes > 20) {
+      throw new Error('Nombre de personnes invalide (doit être entre 1 et 20)');
+    }
+    
+    // Valider le nombre de portions
+    const portions = parseInt(data.portions);
+    if (isNaN(portions) || portions < 1 || portions > 100) {
+      throw new Error('Nombre de portions invalide (doit être entre 1 et 100)');
+    }
+    
+    // Valider le format du téléphone si fourni
+    if (data.telephone && data.telephone.trim() !== '') {
+      const phoneRegex = /^[0-9]{10}$/;
+      if (!phoneRegex.test(data.telephone)) {
+        throw new Error('Format de téléphone invalide (10 chiffres attendus)');
+      }
+    }
+    
+    return true;
+  }
+
+  /**
+   * Récupère la dernière erreur
+   * @returns {string|null} - Message d'erreur ou null
+   */
+  getLastError() {
+    return this.lastError;
+  }
 }
 
-// Écouter les requêtes
-addEventListener('fetch', event => {
-  event.respondWith(handleRequest(event.request));
+// Créer et exposer l'instance de l'API
+window.FeteVoisinsApi = new FeteVoisinsApiClient();
+
+// Pour la compatibilité avec l'ancienne API
+window.addEventListener('fetch', event => {
+  console.warn('L\'API handleRequest est dépréciée. Utilisez FeteVoisinsApi à la place.');
 });
