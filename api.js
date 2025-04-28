@@ -1,5 +1,5 @@
 // Configuration
-const API_URL = 'https://script.google.com/macros/s/https://script.google.com/macros/s/AKfycbwqBVhPQOByfcYSuY22t-NFC1vFdjF7nqdImr_Iy6SxDSNE0LC9Iqe5ud0HPKPhdMwAEw/exec/';
+API_URL: 'https://djamchid.github.io/fete-voisins-api/api.js',
 const ALLOWED_ORIGINS = ['https://djamchid.github.io'];
 const MAX_PAYLOAD_SIZE = 1024 * 1024; // 1MB
 
