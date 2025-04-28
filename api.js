@@ -5,7 +5,7 @@
  */
 
 // Configuration
-const API_URL = 'https://script.google.com/macros/s/AKfycbx8hiEDN_ncShkzXKoOk79enFAvcH7TP_xV0KmEqtB5dj1hOkL7f4iterT_KT45PHXoGw/exec';
+const API_URL = 'https://script.google.com/macros/s/AKfycbwQQxPHrQxXm4Rx1NItu0Ejcj0BNE032zwrStBU7_zcV40VY0trPwk2CBKZN7gQ5Zp0fA/exec';
 const DEBUG = false; // Activer pour voir les logs détaillés
 
 /**
